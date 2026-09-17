@@ -1,0 +1,203 @@
+// Schéma de données de l'application de gestion de garderie.
+// Base SQLite locale (fichier prisma/dev.db) — facile à démarrer, migrable vers PostgreSQL plus tard.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Comptes & authentification
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  password  String // hash bcrypt
+  name      String
+  role      String    @default("EDUCATRICE") // ADMIN | EDUCATRICE | PARENT
+  active    Boolean   @default(true)
+  educator  Educator? @relation(fields: [educatorId], references: [id])
+  educatorId String?  @unique
+  sessions  Session[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Groupes (classes) & enfants
+// ---------------------------------------------------------------------------
+
+model Group {
+  id        String          @id @default(cuid())
+  name      String
+  ageMin    Int? // en mois
+  ageMax    Int? // en mois
+  color     String          @default("#0d9488")
+  room      String?
+  capacity  Int?
+  children  Child[]
+  educators GroupEducator[]
+  slots     ScheduleSlot[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model Child {
+  id          String       @id @default(cuid())
+  firstName   String
+  lastName    String
+  birthDate   String // AAAA-MM-JJ
+  gender      String? // F | M | AUTRE
+  group       Group?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  groupId     String?
+  allergies   String?
+  medicalNotes String?
+  notes       String?
+  active      Boolean      @default(true)
+  startDate   String? // date d'entrée AAAA-MM-JJ
+  guardians   Guardian[]
+  attendances Attendance[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Guardian {
+  id        String  @id @default(cuid())
+  child     Child   @relation(fields: [childId], references: [id], onDelete: Cascade)
+  childId   String
+  name      String
+  relation  String // Mère, Père, Tuteur, ...
+  phone     String?
+  email     String?
+  isPrimary Boolean @default(false)
+  canPickUp Boolean @default(true)
+}
+
+// ---------------------------------------------------------------------------
+// Présences des enfants
+// ---------------------------------------------------------------------------
+
+model Attendance {
+  id            String   @id @default(cuid())
+  child         Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+  childId       String
+  date          String // AAAA-MM-JJ
+  status        String // PRESENT | ABSENT | RETARD | EXCUSE
+  arrivalTime   String? // HH:MM
+  departureTime String? // HH:MM
+  note          String?
+  recordedBy    String? // nom de la personne ayant saisi
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([childId, date])
+  @@index([date])
+}
+
+// ---------------------------------------------------------------------------
+// Éducatrices / personnel
+// ---------------------------------------------------------------------------
+
+model Educator {
+  id          String              @id @default(cuid())
+  firstName   String
+  lastName    String
+  email       String?
+  phone       String?
+  position    String              @default("Éducatrice") // Éducatrice, Aide-éducatrice, Directrice, Cuisinier...
+  hireDate    String? // AAAA-MM-JJ
+  qualifications String?
+  notes       String?
+  active      Boolean             @default(true)
+  user        User?
+  groups      GroupEducator[]
+  shifts      WorkShift[]
+  leaves      Leave[]
+  attendances EducatorAttendance[]
+  slots       ScheduleSlot[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model GroupEducator {
+  group      Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId    String
+  educator   Educator @relation(fields: [educatorId], references: [id], onDelete: Cascade)
+  educatorId String
+  isLead     Boolean  @default(false)
+
+  @@id([groupId, educatorId])
+}
+
+// Horaire hebdomadaire type d'une éducatrice (ex : lundi 07:30 - 15:30)
+model WorkShift {
+  id         String   @id @default(cuid())
+  educator   Educator @relation(fields: [educatorId], references: [id], onDelete: Cascade)
+  educatorId String
+  weekday    Int // 1 = lundi ... 7 = dimanche
+  startTime  String // HH:MM
+  endTime    String // HH:MM
+}
+
+// Congés / absences du personnel
+model Leave {
+  id         String   @id @default(cuid())
+  educator   Educator @relation(fields: [educatorId], references: [id], onDelete: Cascade)
+  educatorId String
+  startDate  String // AAAA-MM-JJ
+  endDate    String // AAAA-MM-JJ
+  type       String // CONGE | MALADIE | FORMATION | AUTRE
+  note       String?
+  createdAt  DateTime @default(now())
+}
+
+// Pointage quotidien des éducatrices
+model EducatorAttendance {
+  id         String   @id @default(cuid())
+  educator   Educator @relation(fields: [educatorId], references: [id], onDelete: Cascade)
+  educatorId String
+  date       String // AAAA-MM-JJ
+  status     String // PRESENT | ABSENT | RETARD
+  arrivalTime   String?
+  departureTime String?
+  note       String?
+
+  @@unique([educatorId, date])
+}
+
+// ---------------------------------------------------------------------------
+// Emploi du temps (activités hebdomadaires par groupe)
+// ---------------------------------------------------------------------------
+
+model ScheduleSlot {
+  id          String    @id @default(cuid())
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId     String
+  weekday     Int // 1 = lundi ... 7 = dimanche
+  startTime   String // HH:MM
+  endTime     String // HH:MM
+  title       String
+  description String?
+  location    String?
+  category    String    @default("ACTIVITE") // ACTIVITE | REPAS | SIESTE | ACCUEIL | SORTIE | AUTRE
+  educator    Educator? @relation(fields: [educatorId], references: [id], onDelete: SetNull)
+  educatorId  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([groupId, weekday])
+}
